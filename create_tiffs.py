@@ -15,7 +15,6 @@ def create_tiff(name, grd_files, cleanup=True):
     '''
     Creates a single tiff file from a list of .grd files.
     '''
-    gdal.SetCacheMax(128*1024**2)
     vrt_filename = ".".join((name, "vrt"))
     gdal.BuildVRT(vrt_filename, grd_files)
     
