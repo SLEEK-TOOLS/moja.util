@@ -70,7 +70,7 @@ def process_spatial_output(spatial_output, cleanup=True, start_year=None, output
     if not os.path.exists(output_path):
         os.makedirs(output_path)
     
-    num_workers = cpu_count() * 2
+    num_workers = cpu_count()
     available_mem = psutil.virtual_memory().available
     worker_mem = int(available_mem / 2 / num_workers)
     pool = Pool(num_workers, init_pool, (worker_mem,))
