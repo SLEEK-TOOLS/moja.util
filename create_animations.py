@@ -30,7 +30,7 @@ class FrameGenerator(object):
     def scale(self, in_size, out_size):
         in_width, in_height = in_size
         out_width, out_height = out_size
-        scale_factor = out_width / in_width if in_width > in_height else out_height / in_height
+        scale_factor = float(out_width) / in_width if in_width > in_height else float(out_height) / in_height
         
         return (int(in_width * scale_factor), int(in_height * scale_factor))
         
