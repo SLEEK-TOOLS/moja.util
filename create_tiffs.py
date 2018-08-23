@@ -72,7 +72,7 @@ def process_spatial_output(spatial_output, cleanup=True, start_year=None, output
     
     num_workers = cpu_count()
     available_mem = psutil.virtual_memory().available
-    worker_mem = int(available_mem / 2 / num_workers)
+    worker_mem = int(available_mem * 0.8 / num_workers)
     pool = Pool(num_workers, init_pool, (worker_mem,))
     
     for scenario, raw_output in viewitems(spatial_output):
