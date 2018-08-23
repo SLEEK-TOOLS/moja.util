@@ -6,12 +6,12 @@ import csv
 import subprocess
 import rasterio
 import imageio
+import psutil
 from numpy.ma import masked
 from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
 from moviepy.editor import VideoClip
-from rio_hist.utils import raster_to_image
 from glob import glob
 from future.utils import viewitems
 from argparse import ArgumentParser
@@ -21,11 +21,13 @@ from multiprocessing import cpu_count
 
 class FrameGenerator(object):
     
-    def __init__(self, name, files):
+    def __init__(self, name, files, output_path, gdal_mem=64):
         self.name = name
         self.files = files
+        self.output_path = output_path
         self.color_table = None
         self.color_table_file = None
+        self.gdal_mem = gdal_mem
         
     def scale(self, in_size, out_size):
         in_width, in_height = in_size
@@ -39,7 +41,7 @@ class FrameGenerator(object):
             self.create_color_table()
     
         in_file = self.files[int(t)]
-        frame_file = "{}.png".format(os.path.splitext(in_file)[0])
+        frame_file = os.path.join(self.output_path, "{}_{}.png".format(self.name, int(t)))
         self.colorize(in_file, frame_file)
 
         # Add extra information to the colorized image: year, legend, etc.
@@ -80,8 +82,8 @@ class FrameGenerator(object):
         max_value = max((stats[1] for stats in min_max_by_file))
         step = (max_value - min_value) / 256
         self.color_table = {min_value + i * step: (125, i, 0, 255) for i in range(255)}
-        
-        self.color_table_file = "{}_color.txt".format(self.name)
+       
+        self.color_table_file = os.path.join(self.output_path, "{}_color.txt".format(self.name))
         with open(self.color_table_file, "w") as color_file:
             writer = csv.writer(color_file)
             color_map = [["nv", 255, 255, 255, 255]] + [[val] + list(colors) for val, colors
@@ -96,7 +98,8 @@ class FrameGenerator(object):
             os.path.abspath(self.color_table_file),
             os.path.abspath(out_file),
             "-of", "png",
-            "-q"])
+            "-q",
+            "--config", "GDAL_CACHEMAX", str(self.gdal_mem)])
         
     def get_min_max(self, file):
         try:
@@ -110,16 +113,16 @@ class FrameGenerator(object):
         except:
             return (0, 0)
 
-def create_animation(name, files):
+def create_animation(name, files, output_path, worker_mem):
     '''
     Creates an animation single tiff file from a list of tiff files.
     '''
     sys.stdout = open(os.devnull, "w")
     sys.stderr = open(os.devnull, "w")
     
-    frame_generator = FrameGenerator(name, files)
+    frame_generator = FrameGenerator(name, files, output_path, worker_mem)
     animation = VideoClip(frame_generator.make_frame, duration=len(files))
-    animation.write_videofile("{}.mp4".format(name), fps=1)
+    animation.write_videofile(os.path.join(output_path, "{}.mp4".format(name)), fps=1)
     
     return name
     
@@ -136,7 +139,7 @@ def find_spatial_output(root_path):
     
     return spatial_output
     
-def process_spatial_output(spatial_output, output_path="."):
+def process_spatial_output(spatial_output, output_path=".", pool_size=4):
     '''
     Generates a merged tiff file for each indicator at each year from a dictionary
     of {indicator: {year: [.tiff files]}}
@@ -144,10 +147,12 @@ def process_spatial_output(spatial_output, output_path="."):
     if not os.path.exists(output_path):
         os.makedirs(output_path)
     
-    pool = Pool()
+    available_mem = psutil.virtual_memory().available
+    worker_mem = int(available_mem * 0.8 / pool_size)
+    pool = Pool(pool_size)
     for indicator, files in viewitems(spatial_output):
-        pool.apply_async(create_animation, (indicator, files), callback=logging.info)
-
+        pool.apply_async(create_animation, (indicator, files, output_path, worker_mem),
+                         callback=logging.info)
     pool.close()
     pool.join()
     
@@ -162,11 +167,13 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", required=False, default=".",
                         help="path to store generated animation in - will be created if it doesn't exist")
 
+    parser.add_argument("--pool_size", help="Process pool size", required=False, default=4, type=int)
+
     args = parser.parse_args()
     spatial_output = find_spatial_output(args.indicator_root)
     if spatial_output:
         logging.info("Found {} total spatial indicators.".format(len(spatial_output)))
-        process_spatial_output(spatial_output, args.output_path)
+        process_spatial_output(spatial_output, args.output_path, args.pool_size)
         logging.info("Done")
     else:
         logging.info("No spatial output found.")
