@@ -48,19 +48,28 @@ class FrameGenerator(object):
         img = Image.open(frame_file)
         out_size = (1280, 720)
         img = img.resize(self.scale(img.size, out_size))
-        canvas_size = img.size
-        canvas = ImageDraw.Draw(img)
-        font = ImageFont.truetype("arial.ttf", 20)
-        year = os.path.splitext(in_file)[0].rsplit("_", 1)[1]
-        canvas.text((5, canvas_size[1] - 30), year, font=font, fill=(0, 0, 0, 255))
-        canvas.text((5, 5), self.name, font=font, fill=(0, 0, 0, 255))
 
         legend_line_width = 2
+        legend_y_offset = 30
         legend_top_label = str(round(max(self.color_table.keys()), 4))
         legend_bottom_label = str(round(min(self.color_table.keys()), 4))
         legend_label_width = max((len(legend_top_label), len(legend_bottom_label))) * 15
-        legend_start = (canvas_size[0] - legend_label_width, 30)
-        legend_end = (legend_start[0], len(self.color_table) * legend_line_width + legend_start[1])
+        legend_size = (legend_label_width, len(self.color_table) * legend_line_width)
+        
+        out_img = Image.new(img.mode,
+                            (img.size[0] + legend_size[0], max(img.size[1], legend_size[1] + legend_y_offset * 2)),
+                            color=(255, 255, 255, 255))
+                            
+        out_img.paste(img)
+        canvas_size = out_img.size
+        canvas = ImageDraw.Draw(out_img)
+        font = ImageFont.truetype("arial.ttf", 20)
+        year = os.path.splitext(in_file)[0].rsplit("_", 1)[1]
+        canvas.text((5, canvas_size[1] - legend_y_offset), year, font=font, fill=(0, 0, 0, 255))
+        canvas.text((5, 5), self.name, font=font, fill=(0, 0, 0, 255))
+
+        legend_start = (canvas_size[0] - legend_label_width, legend_y_offset)
+        legend_end = (legend_start[0], legend_size[1] + legend_start[1])
         canvas.text((legend_start[0], 0), legend_top_label, font=font, fill=(0, 0, 0, 255))
         canvas.text(legend_end, legend_bottom_label, font=font, fill=(0, 0, 0, 255))
                     
@@ -70,9 +79,10 @@ class FrameGenerator(object):
             line_end = (legend_start[0] + legend_label_width / 2 + 10, legend_start[1] + i * legend_line_width + legend_line_width)
             canvas.rectangle((line_start, line_end), fill=color, outline=color)
 
-        img.save(frame_file)
+        out_img.save(frame_file)
         data = imageio.imread(frame_file)
         os.remove(frame_file)
+        os.remove("{}.aux.xml".format(frame_file))
         
         return data
         
@@ -121,9 +131,11 @@ def create_animation(name, files, output_path, worker_mem):
     sys.stderr = open(os.devnull, "w")
     
     frame_generator = FrameGenerator(name, files, output_path, worker_mem)
-    animation = VideoClip(frame_generator.make_frame, duration=len(files))
-    animation.write_videofile(os.path.join(output_path, "{}.mp4".format(name)), fps=1)
-    
+    duration = len(files)
+    fps = int(len(files) / duration)
+    animation = VideoClip(frame_generator.make_frame, duration=duration)
+    animation.write_videofile(os.path.join(output_path, "{}.avi".format(name)),
+                              fps=fps, codec="png")
     return name
     
 def find_spatial_output(root_path):
