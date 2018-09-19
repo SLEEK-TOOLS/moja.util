@@ -130,12 +130,14 @@ def create_animation(name, files, output_path, worker_mem):
     sys.stdout = open(os.devnull, "w")
     sys.stderr = open(os.devnull, "w")
     
+    # Add the last file twice to avoid it getting dropped from the animation.
+    files.extend(files[-1:])
+    
     frame_generator = FrameGenerator(name, files, output_path, worker_mem)
     duration = len(files)
-    fps = int(len(files) / duration)
     animation = VideoClip(frame_generator.make_frame, duration=duration)
     animation.write_videofile(os.path.join(output_path, "{}.avi".format(name)),
-                              fps=fps, codec="png")
+                              fps=1, codec="png")
     return name
     
 def find_spatial_output(root_path):
@@ -168,6 +170,9 @@ def process_spatial_output(spatial_output, output_path=".", pool_size=4):
     pool.close()
     pool.join()
     
+    for palette_file in glob(os.path.join(output_path, "*_color.txt")):
+        os.remove(palette_file)
+    
 if __name__ == "__main__":
     logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 
@@ -179,7 +184,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_path", required=False, default=".",
                         help="path to store generated animation in - will be created if it doesn't exist")
 
-    parser.add_argument("--pool_size", help="Process pool size", required=False, default=4, type=int)
+    parser.add_argument("--pool_size", help="Process pool size", required=False, default=1, type=int)
 
     args = parser.parse_args()
     spatial_output = find_spatial_output(args.indicator_root)
