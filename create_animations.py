@@ -16,6 +16,7 @@ from glob import glob
 from future.utils import viewitems
 from argparse import ArgumentParser
 from collections import defaultdict
+from collections import OrderedDict
 from multiprocessing import Pool
 from multiprocessing import cpu_count
 
@@ -90,8 +91,8 @@ class FrameGenerator(object):
         min_max_by_file = [self.get_min_max(file) for file in self.files]
         min_value = min((stats[0] for stats in min_max_by_file))
         max_value = max((stats[1] for stats in min_max_by_file))
-        step = (max_value - min_value) / 256
-        self.color_table = {min_value + i * step: (125, i, 0, 255) for i in range(255)}
+        step = float(max_value - min_value) / 256.0
+        self.color_table = OrderedDict((min_value + i * step, (125, i, 0, 255)) for i in range(255))
        
         self.color_table_file = os.path.join(self.output_path, "{}_color.txt".format(self.name))
         with open(self.color_table_file, "w") as color_file:
@@ -125,7 +126,7 @@ class FrameGenerator(object):
 
 def create_animation(name, files, output_path, worker_mem):
     '''
-    Creates an animation single tiff file from a list of tiff files.
+    Creates an animation from a list of tiff files.
     '''
     sys.stdout = open(os.devnull, "w")
     sys.stderr = open(os.devnull, "w")
@@ -153,10 +154,10 @@ def find_spatial_output(root_path):
     
     return spatial_output
     
-def process_spatial_output(spatial_output, output_path=".", pool_size=4):
+def process_spatial_output(spatial_output, output_path=".", pool_size=1):
     '''
-    Generates a merged tiff file for each indicator at each year from a dictionary
-    of {indicator: {year: [.tiff files]}}
+    Creates an animation for each indicator from a dictionary of
+    {indicator: {year: [.tiff files]}}
     '''
     if not os.path.exists(output_path):
         os.makedirs(output_path)
