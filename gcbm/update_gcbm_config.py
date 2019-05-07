@@ -28,13 +28,16 @@ class GCBMConfigurer:
             os.makedirs(self._output_path)
         
         for template in chain.from_iterable(
-            iglob(os.path.join(args.template_path, ext))
+            iglob(os.path.join(self._template_path, ext))
             for ext in ["*.cfg", "*.json"]
         ):
             shutil.copy(template, self._output_path)
         
+        # Merge the study areas in reverse order - i.e. users supply base, scenario 1,
+        # scenario 2, etc. with each successive scenario taking priority: if layer A is
+        # found in scenario 2, don't add layer A from scenario 1.
         combined_study_area = None
-        for layer_path in self._layer_paths:
+        for layer_path in reversed(self._layer_paths):
             study_area = self.get_study_area(layer_path)
             if not combined_study_area:
                 combined_study_area = study_area
