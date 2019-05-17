@@ -136,7 +136,7 @@ class GCBMConfigurer:
         with self.update_json_file(config_file_path) as study_area_config:
             simulation_config = study_area_config["LocalDomain"]
             simulation_config["start_date"] = "{}/01/01".format(start_year)
-            simulation_config["end_date"] = "{}/01/01".format(end_year)
+            simulation_config["end_date"] = "{}/01/01".format(end_year + 1)
             logging.info("Simulation time period updated: {} to {}".format(start_year, end_year))
             
     def update_simulation_disturbances(self, study_area):
