@@ -181,7 +181,7 @@ class GCBMConfigurer:
                 }
 
     def add_simulation_data_variables(self, study_area):
-        config_file_path = self.find_config_file(self._output_path, "Variables")
+        config_file_path = self.find_config_file(self._output_path, "Variables", "initial_classifier_set")
         with self.update_json_file(config_file_path) as variable_config:
             variables = variable_config["Variables"]
             classifier_layers = variables["initial_classifier_set"]["transform"]["vars"]
@@ -251,6 +251,9 @@ class GCBMConfigurer:
             logging.info("Found layer: {}".format(layer))
             layer_prefix, _ = os.path.splitext(os.path.basename(layer))
             layer_path = os.path.join(layer_root, layer_prefix)
+            if not layer_path.endswith("moja"):
+                continue
+                
             layer_name, _ = layer_prefix.split("_moja")
             provider_layers.append({
                 "name"  : layer_name,
