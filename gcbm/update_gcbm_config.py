@@ -199,7 +199,7 @@ class GCBMConfigurer:
                     
                 variables[layer_name] = {
                     "transform": {
-                        "library"      : "internal.flint",
+                        "library"      : "moja.modules.cbm",
                         "type"         : "TimeSeriesIdxFromFlintDataTransform",
                         "provider"     : "RasterTiled",
                         "data_id"      : layer_name,
@@ -235,8 +235,7 @@ class GCBMConfigurer:
             else default_disturbance_order.index(disturbance_type)
     
     def get_disturbance_type(self, layer):
-        metadata_file = os.path.join(layer["path"], "{}_moja.json".format(layer["name"]))
-        metadata = json.load(open(metadata_file, "rb"))
+        metadata = json.load(open(layer["metadata_path"], "rb"))
         dist_type = next((attr for attr in metadata["attributes"].values())).get("disturbance_type")
         
         return dist_type
@@ -244,22 +243,25 @@ class GCBMConfigurer:
     def scan_for_layers(self, layer_root):
         provider_layers = []
         layers = {fn for fn in os.listdir(layer_root)
-                  if os.path.isdir(os.path.join(layer_root, fn))
-                  or fn.endswith(".zip")}
+                  if (os.path.isdir(os.path.join(layer_root, fn)) and fn.endswith("moja"))
+                  or fn.endswith(".zip")
+                  or (fn.endswith("_moja.tiff")
+                      and not os.path.isdir(os.path.join(layer_root, os.path.splitext(fn)[0])))}
         
         for layer in layers:
             logging.info("Found layer: {}".format(layer))
             layer_prefix, _ = os.path.splitext(os.path.basename(layer))
-            layer_path = os.path.join(layer_root, layer_prefix)
-            if not layer_path.endswith("moja"):
-                continue
-                
+            layer_path = os.path.join(layer_root, layer)
             layer_name, _ = layer_prefix.split("_moja")
+            metadata_path = os.path.join(layer_root, layer_prefix, "{}.json".format(layer_prefix)) \
+                if os.path.isdir(layer_path) else os.path.join(layer_root, "{}.json".format(layer_prefix))
+            
             provider_layers.append({
-                "name"  : layer_name,
-                "type"  : None,
-                "path"  : layer_path,
-                "prefix": layer_prefix
+                "name"         : layer_name,
+                "prefix"       : layer_prefix,
+                "type"         : None,
+                "path"         : layer_path,
+                "metadata_path": metadata_path
             })
             
         return provider_layers
@@ -293,18 +295,19 @@ class GCBMConfigurer:
         return study_area
 
 if __name__ == "__main__":
-    logging.basicConfig(filename=r"logs\update_gcbm_config.log", filemode="w",
-						level=logging.INFO, format="%(message)s")
-
     parser = ArgumentParser(description="Update GCBM spatial provider configuration.")
     parser.add_argument("--layer_root", help="one or more directories containing tiled layers and study area metadata", nargs="+", type=os.path.abspath)
     parser.add_argument("--template_path", help="GCBM config file template path", required=True, type=os.path.abspath)
     parser.add_argument("--input_db_path", help="GCBM input database path", required=True, type=os.path.abspath)
     parser.add_argument("--output_path", help="GCBM config file output path", default=".", type=os.path.abspath)
-    parser.add_argument("--start_year", help="simulation start year")
-    parser.add_argument("--end_year", help="simulation end year")
+    parser.add_argument("--start_year", type=int, help="simulation start year")
+    parser.add_argument("--end_year", type=int, help="simulation end year")
+    parser.add_argument("--log_path", default=".", type=os.path.abspath)
     args = parser.parse_args()
     
+    logging.basicConfig(filename=os.path.join(args.log_path, "update_gcbm_config.log"),
+                        filemode="w", level=logging.INFO, format="%(message)s")
+
     configurer = GCBMConfigurer(
         args.layer_root, args.template_path, args.input_db_path,
         args.output_path, args.start_year, args.end_year)
