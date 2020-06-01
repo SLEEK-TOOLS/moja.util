@@ -246,7 +246,8 @@ class GCBMConfigurer:
                   if (os.path.isdir(os.path.join(layer_root, fn)) and fn.endswith("moja"))
                   or fn.endswith(".zip")
                   or (fn.endswith("_moja.tiff")
-                      and not os.path.isdir(os.path.join(layer_root, os.path.splitext(fn)[0])))}
+                      and not os.path.isdir(os.path.join(layer_root, os.path.splitext(fn)[0]))
+                      and os.path.exists(os.path.join(layer_root, ".".join((os.path.splitext(fn)[0], "json")))))}
         
         for layer in layers:
             logging.info("Found layer: {}".format(layer))
