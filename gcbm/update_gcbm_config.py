@@ -6,6 +6,7 @@ import logging
 import shutil
 import sys
 import sqlite3
+import csv
 from itertools import chain
 from argparse import ArgumentParser
 from glob import iglob
@@ -14,7 +15,8 @@ from contextlib import contextmanager
 class GCBMConfigurer:
 
     def __init__(self, layer_paths, template_path, input_db_path, output_path=".",
-                 start_year=None, end_year=None, disturbance_order=None):
+                 start_year=None, end_year=None, disturbance_order=None,
+                 excluded_layers=None):
         self._layer_paths = layer_paths
         self._template_path = template_path
         self._input_db_path = input_db_path
@@ -22,6 +24,7 @@ class GCBMConfigurer:
         self._start_year = start_year
         self._end_year = end_year
         self._user_disturbance_order = disturbance_order or []
+        self._excluded_layers = excluded_layers or []
 
     def configure(self):
         if not os.path.exists(self._output_path):
@@ -42,11 +45,16 @@ class GCBMConfigurer:
             if not combined_study_area:
                 combined_study_area = study_area
 
-            current_layer_names = (layer["name"] for layer in combined_study_area["layers"])
+            current_layer_names = [layer["name"] for layer in combined_study_area["layers"]]
             combined_study_area["layers"].extend(filter(
                 lambda layer: layer["name"] not in current_layer_names,
                 study_area["layers"]))
 
+        # Remove any explicitly excluded layers from the final study area.
+        for i, layer in enumerate(combined_study_area["layers"]):
+            if layer["name"] in self._excluded_layers:
+                del combined_study_area["layers"][i]
+        
         self.update_simulation_study_area(combined_study_area)
         self.update_simulation_disturbances(combined_study_area)
         self.add_spinup_data_variables(combined_study_area)
@@ -298,6 +306,7 @@ class GCBMConfigurer:
 if __name__ == "__main__":
     parser = ArgumentParser(description="Update GCBM spatial provider configuration.")
     parser.add_argument("--layer_root", help="one or more directories containing tiled layers and study area metadata", nargs="+", type=os.path.abspath)
+    parser.add_argument("--exclude", help="path to a text file listing names of layers to exclude from simulation, one per line", type=os.path.abspath)
     parser.add_argument("--template_path", help="GCBM config file template path", required=True, type=os.path.abspath)
     parser.add_argument("--input_db_path", help="GCBM input database path", required=True, type=os.path.abspath)
     parser.add_argument("--output_path", help="GCBM config file output path", default=".", type=os.path.abspath)
@@ -309,8 +318,11 @@ if __name__ == "__main__":
     logging.basicConfig(filename=os.path.join(args.log_path, "update_gcbm_config.log"),
                         filemode="w", level=logging.INFO, format="%(message)s")
 
+    excluded_layers = [line[0] for line in csv.reader(open(args.exclude, "r"))] if args.exclude else None
+
     configurer = GCBMConfigurer(
         args.layer_root, args.template_path, args.input_db_path,
-        args.output_path, args.start_year, args.end_year)
+        args.output_path, args.start_year, args.end_year,
+        excluded_layers=excluded_layers)
     
     configurer.configure()
