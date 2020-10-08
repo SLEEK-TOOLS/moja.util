@@ -60,6 +60,7 @@ class GCBMConfigurer:
         self.add_spinup_data_variables(combined_study_area)
         self.add_simulation_data_variables(combined_study_area)
         self.update_provider_config(combined_study_area)
+        self.add_missing_pools()
         if self._start_year and self._end_year:
             self.update_simulation_years(self._start_year, self._end_year)
     
@@ -90,6 +91,18 @@ class GCBMConfigurer:
                 return config_file
         
         return None
+
+    def add_missing_pools(self):
+        conn = sqlite3.connect(self._input_db_path)
+        db_pool_names = [row[0] for row in conn.execute("SELECT name FROM pool")]
+        
+        pool_config_path = self.find_config_file(self._output_path, "Pools")
+        with self.update_json_file(pool_config_path) as pool_config:
+            pool_section = pool_config["Pools"]
+            config_pool_names = list(pool_section.keys())
+            for db_pool_name in db_pool_names:
+                if db_pool_name not in config_pool_names:
+                    pool_section[db_pool_name] = 0.0
 
     def update_provider_config(self, study_area):
         provider_config_path = self.find_config_file(self._output_path, "Providers")
@@ -313,16 +326,21 @@ if __name__ == "__main__":
     parser.add_argument("--start_year", type=int, help="simulation start year")
     parser.add_argument("--end_year", type=int, help="simulation end year")
     parser.add_argument("--log_path", default=".", type=os.path.abspath)
+    parser.add_argument("--disturbance_order", default=None, type=os.path.abspath)
     args = parser.parse_args()
     
     logging.basicConfig(filename=os.path.join(args.log_path, "update_gcbm_config.log"),
                         filemode="w", level=logging.INFO, format="%(message)s")
 
+    disturbance_order = None
+    if args.disturbance_order:
+        disturbance_order = [line[0] for line in csv.reader(open(args.disturbance_order))]
+
     excluded_layers = [line[0] for line in csv.reader(open(args.exclude, "r"))] if args.exclude else None
 
     configurer = GCBMConfigurer(
         args.layer_root, args.template_path, args.input_db_path,
-        args.output_path, args.start_year, args.end_year,
-        excluded_layers=excluded_layers)
+        args.output_path, args.start_year, args.end_year, disturbance_order,
+        excluded_layers)
     
     configurer.configure()
