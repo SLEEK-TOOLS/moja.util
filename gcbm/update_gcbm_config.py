@@ -218,6 +218,10 @@ class GCBMConfigurer:
                 elif "reporting_classifier" in layer_tags:
                     reporting_classifier_layers.append(layer_name)
                     
+                layer_settings = next(filter(lambda tag: isinstance(tag, dict), layer_tags), {}).get("settings", {})
+                timeseries_start = layer_settings.get("start_year", 0)
+                timeseries_origin = layer_settings.get("origin", "start_sim")
+                    
                 variables[layer_name] = {
                     "transform": {
                         "library"      : "moja.modules.cbm",
@@ -225,7 +229,8 @@ class GCBMConfigurer:
                         "provider"     : "RasterTiled",
                         "data_id"      : layer_name,
                         "sub_same"     : "true",
-                        "start_year"   : 0,
+                        "origin"       : timeseries_origin,
+                        "start_year"   : timeseries_start,
                         "data_per_year": layer["nStepsPerYear"],
                         "n_years"      : layer["nLayers"]
                     }
