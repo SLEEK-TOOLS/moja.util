@@ -120,8 +120,8 @@ def insert_matrix(conn, matrix):
         ).fetchone() is None:
             cur.execute(
                 """
-                INSERT INTO tblsourcename (dmstructureid, column, description)
-                SELECT TOP 1 2, MAX(column) + 1, ?
+                INSERT INTO tblsourcename (dmstructureid, row, description)
+                SELECT TOP 1 2, MAX(row) + 1, ?
                 FROM tblsourcename
                 WHERE dmstructureid = 2
                 """, [flux.source_pool])
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     connect_string = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={}"
     conn = pyodbc.connect(connect_string.format(args.output_path))
     try:
-        for matrix in scan_for_matrices("residue_dms_test.xlsx"):
+        for matrix in scan_for_matrices(args.matrix_path):
             insert_matrix(conn, matrix)
     finally:
         if conn:
