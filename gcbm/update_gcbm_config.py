@@ -112,11 +112,14 @@ class GCBMConfigurer:
         
         with self.update_json_file(provider_config_path) as provider_config:
             provider_section = provider_config["Providers"]
-            layer_config = None
             for provider, config in provider_section.items():
                 if "layers" in config:
                     spatial_provider_config = config
-                    break
+                elif "path" in config:
+                    aspatial_provider_config = config
+
+            aspatial_provider_config["path"] = os.path.join(os.path.relpath(
+                self._input_db_path, self._output_path))
 
             spatial_provider_config["tileLatSize"]  = study_area["tile_size"]
             spatial_provider_config["tileLonSize"]  = study_area["tile_size"]
@@ -134,7 +137,7 @@ class GCBMConfigurer:
                     "layer_prefix": layer["prefix"]
                 })
                 
-            layer_config = spatial_provider_config["layers"] = provider_layers
+            spatial_provider_config["layers"] = provider_layers
             logging.info("Updated provider configuration: {}".format(provider_config_path))
 
     def update_simulation_study_area(self, study_area):
@@ -254,6 +257,9 @@ class GCBMConfigurer:
         return [row[0] for row in conn.execute("SELECT name FROM disturbance_type ORDER BY code")]
 
     def get_disturbance_order(self, layer):
+        if "rollback" in layer["name"]:
+            return -10000 + int(layer["name"].split("_")[-1])
+    
         disturbance_type = self.get_disturbance_type(layer)
         default_disturbance_order = self.get_default_disturbance_order()
         return -len(self._user_disturbance_order) + self._user_disturbance_order.index(disturbance_type) \

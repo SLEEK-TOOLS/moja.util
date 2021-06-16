@@ -33,7 +33,7 @@ def df_to_xls(row, col):
     return f"{string.ascii_uppercase[col]}{row + 1}"
 
 
-def scan_for_matrices(file):
+def scan_for_matrices(files):
     matrices = []
     associations = {}
 
@@ -45,97 +45,98 @@ def scan_for_matrices(file):
     associations_matrix_item_row = [None,  "s",  "s"]
     associations_eco_item_row    = [None, None,  "s"]
 
-    sheets = pd.read_excel(file, header=None, sheet_name=None)
-    for sheet, df in sheets.items():
-        # Find all the populated cells and whether they're a string or numeric type
-        # to simplify detecting the disturbance matrix definitions.
-        search_mask = df.applymap(
-            lambda val: (
-                "s" if isinstance(val, str)
-                else "n" if isinstance(val, float) or isinstance(val, int)
-                else None
-            ) if pd.notnull(val) else None)
+    for file in files:
+        sheets = pd.read_excel(file, header=None, sheet_name=None)
+        for sheet, df in sheets.items():
+            # Find all the populated cells and whether they're a string or numeric type
+            # to simplify detecting the disturbance matrix definitions.
+            search_mask = df.applymap(
+                lambda val: (
+                    "s" if isinstance(val, str)
+                    else "n" if isinstance(val, float) or isinstance(val, int)
+                    else None
+                ) if pd.notnull(val) else None)
 
-        checked = pd.DataFrame(False, columns=df.columns, index=df.index)
+            checked = pd.DataFrame(False, columns=df.columns, index=df.index)
 
-        for r, row in search_mask.iterrows():
-            for c, val in enumerate(row):
-                # Skip previously checked cells.
-                if checked.loc[r, c]:
-                    continue
+            for r, row in search_mask.iterrows():
+                for c, val in enumerate(row):
+                    # Skip previously checked cells.
+                    if checked.loc[r, c]:
+                        continue
 
-                checked.loc[r, c] = True
+                    checked.loc[r, c] = True
 
-                # Skip cells too close to the end of the sheet to form a matrix definition.
-                if c > len(row) - 3 or r == len(search_mask):
-                    continue
-                
-                '''
-                Matrices are defined as a name in the top-left cell followed by at least
-                one carbon flux, i.e.:
-                <name>      <blank>    <blank>
-                <source>    <sink>     <proportion>
-                '''
-                is_matrix = np.all(search_mask.loc[r:r, c:c + 2].values == matrix_header) \
-                    and np.all(search_mask.loc[r + 1:r + 1, c: c + 2].values == matrix_flux)
+                    # Skip cells too close to the end of the sheet to form a matrix definition.
+                    if c > len(row) - 3 or r == len(search_mask):
+                        continue
                     
-                '''
-                Disturbance matrix associations are defined as a single cell with the value
-                "Associations" followed by rows of the format:
-                <disturbance type>    <disturbance matrix>    <ecoboundary>
-                                                              <ecoboundary>
-                
-                If a matrix doesn't appear in the associations table, a disturbance type of
-                the same name gets created and associated with all ecoboundaries.
-                '''
-                is_associations_table = np.all(search_mask.loc[r:r, c:c + 2].values == associations_table_header) \
-                    and np.all(search_mask.loc[r + 1:r + 1, c: c + 2].values == associations_item_header)
-                    
-                if is_matrix:
-                    # Found a matrix - now collect all the data.
-                    matrix_name = df.loc[r, c]
-                    print(f"Matrix found in {sheet} at {df_to_xls(r, c)}: {matrix_name}")
-                    checked.loc[r:r, c:c + 2] = True
-                    
-                    matrix = DisturbanceMatrix(matrix_name)
-                    for matrix_row_idx in range(r + 1, len(search_mask)):
-                        if not np.all(search_mask.loc[matrix_row_idx:matrix_row_idx, c:c + 2].values == matrix_flux):
-                            # The matrix is complete when the from/to/proportion pattern ends.
-                            break
-
-                        matrix.add_flux(Flux(*df.loc[matrix_row_idx:matrix_row_idx, c: c + 2].values.tolist()[0]))
-                        checked.loc[matrix_row_idx:matrix_row_idx, c:c + 2] = True
-                    
-                    matrices.append(matrix)
-                elif is_associations_table:
-                    print(f"DM associations found in {sheet} at {df_to_xls(r, c)}")
-                    checked.loc[r:r, c:c + 2] = True
-                    
-                    current_dist_type = None
-                    current_matrix = None
-                    for row_idx in range(r + 1, len(search_mask)):
-                        if not (
-                            np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_item_header)
-                            or np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_matrix_item_row)
-                            or np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_eco_item_row)
-                        ):
-                            # The association table is complete when the content patterns end.
-                            break
-
-                        dist_type, matrix, ecoboundary = df.loc[row_idx:row_idx, c: c + 2].values.tolist()[0]
-                        current_dist_type = dist_type if pd.notnull(dist_type) else current_dist_type
-                        current_matrix = matrix if pd.notnull(matrix) else current_matrix
+                    '''
+                    Matrices are defined as a name in the top-left cell followed by at least
+                    one carbon flux, i.e.:
+                    <name>      <blank>    <blank>
+                    <source>    <sink>     <proportion>
+                    '''
+                    is_matrix = np.all(search_mask.loc[r:r, c:c + 2].values == matrix_header) \
+                        and np.all(search_mask.loc[r + 1:r + 1, c: c + 2].values == matrix_flux)
                         
-                        if current_matrix not in associations:
-                            associations[current_matrix] = {}
+                    '''
+                    Disturbance matrix associations are defined as a single cell with the value
+                    "Associations" followed by rows of the format:
+                    <disturbance type>    <disturbance matrix>    <ecoboundary>
+                                                                  <ecoboundary>
+                    
+                    If a matrix doesn't appear in the associations table, a disturbance type of
+                    the same name gets created and associated with all ecoboundaries.
+                    '''
+                    is_associations_table = np.all(search_mask.loc[r:r, c:c + 2].values == associations_table_header) \
+                        and np.all(search_mask.loc[r + 1:r + 1, c: c + 2].values == associations_item_header)
                         
-                        associations[current_matrix]["disturbance_type"] = current_dist_type
+                    if is_matrix:
+                        # Found a matrix - now collect all the data.
+                        matrix_name = df.loc[r, c]
+                        print(f"Matrix found in {sheet} at {df_to_xls(r, c)}: {matrix_name}")
+                        checked.loc[r:r, c:c + 2] = True
                         
-                        if "ecoboundaries" not in associations[current_matrix]:
-                            associations[current_matrix]["ecoboundaries"] = []
+                        matrix = DisturbanceMatrix(matrix_name)
+                        for matrix_row_idx in range(r + 1, len(search_mask)):
+                            if not np.all(search_mask.loc[matrix_row_idx:matrix_row_idx, c:c + 2].values == matrix_flux):
+                                # The matrix is complete when the from/to/proportion pattern ends.
+                                break
+
+                            matrix.add_flux(Flux(*df.loc[matrix_row_idx:matrix_row_idx, c: c + 2].values.tolist()[0]))
+                            checked.loc[matrix_row_idx:matrix_row_idx, c:c + 2] = True
                         
-                        associations[current_matrix]["ecoboundaries"].append(ecoboundary)
-                        checked.loc[row_idx:row_idx, c:c + 2] = True
+                        matrices.append(matrix)
+                    elif is_associations_table:
+                        print(f"DM associations found in {sheet} at {df_to_xls(r, c)}")
+                        checked.loc[r:r, c:c + 2] = True
+                        
+                        current_dist_type = None
+                        current_matrix = None
+                        for row_idx in range(r + 1, len(search_mask)):
+                            if not (
+                                np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_item_header)
+                                or np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_matrix_item_row)
+                                or np.all(search_mask.loc[row_idx:row_idx, c:c + 2].values == associations_eco_item_row)
+                            ):
+                                # The association table is complete when the content patterns end.
+                                break
+
+                            dist_type, matrix, ecoboundary = df.loc[row_idx:row_idx, c: c + 2].values.tolist()[0]
+                            current_dist_type = dist_type if pd.notnull(dist_type) else current_dist_type
+                            current_matrix = matrix if pd.notnull(matrix) else current_matrix
+                            
+                            if current_matrix not in associations:
+                                associations[current_matrix] = {}
+                            
+                            associations[current_matrix]["disturbance_type"] = current_dist_type
+                            
+                            if "ecoboundaries" not in associations[current_matrix]:
+                                associations[current_matrix]["ecoboundaries"] = []
+                            
+                            associations[current_matrix]["ecoboundaries"].append(ecoboundary)
+                            checked.loc[row_idx:row_idx, c:c + 2] = True
     
     for matrix in matrices:
         dm_associations = associations.get(matrix.name)
@@ -151,6 +152,10 @@ def scan_for_matrices(file):
 
 def insert_matrix(conn, matrix):
     cur = conn.cursor()
+    if cur.execute("SELECT TOP 1 * FROM tbldm WHERE name = ?", [matrix.name]).fetchone() is not None:
+        print(f"Matrix '{matrix.name}' already exists - skipping.")
+        return
+
     cur.execute(
         """
         INSERT INTO tbldm (dmid, name, description, dmstructureid)
@@ -235,9 +240,9 @@ def insert_matrix(conn, matrix):
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Add DMs to AIDB")
-    parser.add_argument("matrix_path", type=os.path.abspath, help="Path to disturbance matrix spreadsheet")
     parser.add_argument("aidb_path", type=os.path.abspath, help="Path to original AIDB")
     parser.add_argument("output_path", type=os.path.abspath, help="Path to copy of AIDB to create")
+    parser.add_argument("matrix_paths", type=os.path.abspath, nargs="+", help="Path to disturbance matrix spreadsheet(s)")
     args = parser.parse_args()
     
     if os.path.exists(args.output_path):
@@ -249,7 +254,7 @@ if __name__ == "__main__":
     connect_string = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={}"
     conn = pyodbc.connect(connect_string.format(args.output_path))
     try:
-        for matrix in scan_for_matrices(args.matrix_path):
+        for matrix in scan_for_matrices(args.matrix_paths):
             insert_matrix(conn, matrix)
     finally:
         if conn:
