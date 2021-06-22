@@ -208,6 +208,11 @@ class GCBMConfigurer:
         config_file_path = self.find_config_file(self._output_path, "Variables", "initial_classifier_set")
         with self.update_json_file(config_file_path) as variable_config:
             variables = variable_config["Variables"]
+            
+            disturbance_order = variables.get("user_disturbance_order", [])
+            disturbance_order.extend(self._user_disturbance_order or [])
+            variables["user_disturbance_order"] = disturbance_order
+            
             classifier_layers = variables["initial_classifier_set"]["transform"]["vars"]
             reporting_classifier_layers = variables["reporting_classifiers"]["transform"]["vars"]
             
