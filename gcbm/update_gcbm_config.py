@@ -51,9 +51,10 @@ class GCBMConfigurer:
                 study_area["layers"]))
 
         # Remove any explicitly excluded layers from the final study area.
-        for i, layer in enumerate(combined_study_area["layers"]):
-            if layer["name"] in self._excluded_layers:
-                del combined_study_area["layers"][i]
+        combined_study_area["layers"] = [
+            layer for layer in combined_study_area["layers"]
+            if layer["name"] not in self._excluded_layers
+        ]
         
         self.update_simulation_study_area(combined_study_area)
         self.update_simulation_disturbances(combined_study_area)
