@@ -204,6 +204,46 @@ class GCBMConfigurer:
                         "format": "long"
                     }
                 }
+        
+        has_delay_layer = filter(lambda l: l["name"] == "inventory_delay", study_area["layers"])
+        if has_delay_layer:
+            aspatial_spinup_parameters_sql = (
+                "SELECT s.return_interval AS return_interval, s.max_rotations AS max_rotations, "
+                "dt.name AS historic_disturbance_type, dt.name AS last_pass_disturbance_type, "
+                "s.mean_annual_temperature AS mean_annual_temperature "
+                "FROM spinup_parameter s "
+                "INNER JOIN disturbance_type dt ON s.historic_disturbance_type_id = dt.id "
+                "INNER JOIN spatial_unit spu ON spu.spinup_parameter_id = s.id "
+                "INNER JOIN admin_boundary a ON spu.admin_boundary_id = a.id "
+                "INNER JOIN eco_boundary e ON spu.eco_boundary_id = e.id "
+                "WHERE a.name = {var:admin_boundary} AND e.name = {var:eco_boundary}"
+            )
+        
+            spinup_parameters_config_file_path = self.find_config_file(
+                self._output_path, "Variables", "spinup_parameters")
+                
+            with self.update_json_file(spinup_parameters_config_file_path) as spinup_config:
+                variables = spinup_config["Variables"]
+                variables["aspatial_spinup_parameters"] = {
+                    "transform": {
+                        "queryString": aspatial_spinup_parameters_sql,
+                        "type": "SQLQueryTransform",
+                        "library": "internal.flint",
+                        "provider": "SQLite"
+                    }
+                }
+                
+                variables["spinup_parameters"] = {
+                    "transform": {
+                        "allow_nulls": "true",
+                        "type": "CompositeTransform",
+                        "library": "internal.flint",
+                        "vars": [
+                            "aspatial_spinup_parameters",
+                            "inventory_delay"
+                        ]
+                    }
+                }
 
     def add_simulation_data_variables(self, study_area):
         config_file_path = self.find_config_file(self._output_path, "Variables", "initial_classifier_set")
