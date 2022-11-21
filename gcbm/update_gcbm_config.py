@@ -205,7 +205,7 @@ class GCBMConfigurer:
                     }
                 }
         
-        has_delay_layer = filter(lambda l: l["name"] == "inventory_delay", study_area["layers"])
+        has_delay_layer = any((l["name"] == "inventory_delay" for l in study_area["layers"]))
         if has_delay_layer:
             aspatial_spinup_parameters_sql = (
                 "SELECT s.return_interval AS return_interval, s.max_rotations AS max_rotations, "
