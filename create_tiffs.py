@@ -10,17 +10,17 @@ from collections import defaultdict
 from multiprocessing import Pool
 from multiprocessing import cpu_count
 
+try:
+    from osgeo import gdal
+except ImportError:
+    import gdal
+
 def create_tiff(name, block_files, cleanup=True):
     '''
     Creates a single tiff file from a list of .grd files.
     '''
-    vrt_filename = ".".join((name, "vrt"))
-    gdal.BuildVRT(vrt_filename, block_files)
-    
-    tiff_filename = ".".join((name, "tiff"))
-    gdal.Translate(tiff_filename, vrt_filename, creationOptions=["BIGTIFF=YES", "TILED=YES", "COMPRESS=DEFLATE"])
-
-    os.remove(vrt_filename)
+    tiff_filename = ".".join((name, "tif"))
+    gdal.Warp(tiff_filename, block_files, creationOptions=["BIGTIFF=YES", "TILED=YES", "COMPRESS=LZW"])
     if cleanup:
         for block_file in block_files:
             # Each .grd file is normally paired with a .hdr file - clean up both.
