@@ -1,10 +1,8 @@
 import io
 import os
 import simplejson as json
-import argparse
 import logging
 import shutil
-import sys
 import sqlite3
 import csv
 from itertools import chain
@@ -61,6 +59,7 @@ class GCBMConfigurer:
         self.add_spinup_data_variables(combined_study_area)
         self.add_simulation_data_variables(combined_study_area)
         self.update_provider_config(combined_study_area)
+        self.update_mask(combined_study_area)
         self.add_missing_pools()
         if self._start_year and self._end_year:
             self.update_simulation_years(self._start_year, self._end_year)
@@ -92,6 +91,25 @@ class GCBMConfigurer:
                 return config_file
         
         return None
+
+    def update_mask(self, study_area):
+        mask_layers = [layer for layer in study_area["layers"] if self.is_mask_layer(layer)]
+        if not mask_layers:
+            return
+
+        for module_config_section in ("Modules", "SpinupModules"):
+            module_config_path = self.find_config_file(
+                self._output_path, module_config_section, "CBMBuildLandUnitModule")
+                
+            with self.update_json_file(module_config_path) as module_config:
+                build_land_unit_config = module_config[module_config_section]["CBMBuildLandUnitModule"]
+                module_settings = build_land_unit_config.get("settings", {})
+                mask_config = module_settings.get("mask_vars", [])
+                for layer in mask_layers:
+                    mask_config.insert(0, layer["name"])
+                
+                module_settings["mask_vars"] = mask_config
+                build_land_unit_config["settings"] = module_settings
 
     def add_missing_pools(self):
         conn = sqlite3.connect(self._input_db_path)
@@ -185,7 +203,10 @@ class GCBMConfigurer:
         config_file_path = self.find_config_file(self._output_path, "SpinupVariables")
         with self.update_json_file(config_file_path) as spinup_config:
             spinup_variables = spinup_config["SpinupVariables"]
-            last_pass_disturbances = spinup_variables.get("last_pass_disturbance_timeseries")
+            last_pass_disturbances = spinup_variables.get(
+                "last_pass_disturbance_timeseries", {}
+            ).get("vars", [])
+
             if not last_pass_disturbances:
                 last_pass_disturbances = []
             
@@ -297,6 +318,10 @@ class GCBMConfigurer:
     def is_disturbance_layer(self, layer):
         layer_tags = layer.get("tags") or []
         return "disturbance" in layer_tags and "last_pass_disturbance" not in layer_tags
+        
+    def is_mask_layer(self, layer):
+        layer_tags = layer.get("tags") or []
+        return "mask" in layer_tags
         
     def get_default_disturbance_order(self):
         conn = sqlite3.connect(self._input_db_path)
