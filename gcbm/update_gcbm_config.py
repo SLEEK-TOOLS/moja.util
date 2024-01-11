@@ -58,6 +58,7 @@ class GCBMConfigurer:
         self.update_simulation_disturbances(combined_study_area)
         self.add_spinup_data_variables(combined_study_area)
         self.add_simulation_data_variables(combined_study_area)
+        self.configure_initial_pool_values(combined_study_area)
         self.update_provider_config(combined_study_area)
         self.update_mask(combined_study_area)
         self.add_missing_pools()
@@ -314,6 +315,45 @@ class GCBMConfigurer:
                 }
                 
             logging.info("Variable configuration updated: {}".format(config_file_path))
+    
+    def configure_initial_pool_values(self, study_area):
+        config_file_path = self.find_config_file(self._output_path, "Pools")
+        with self.update_json_file(config_file_path) as pool_config:
+            pool_section = pool_config["Pools"]
+            pool_names = {str(k).lower(): str(k) for k in pool_section.keys()}
+
+            for layer in study_area["layers"]:
+                layer_name = layer["name"].lower()
+                if layer_name.startswith("initial") and layer_name.split("initial_")[1] in pool_names:
+                    pool = pool_names[layer_name.split("initial_")[1]]
+                    pool_section[pool] = {
+                        "transform": {
+                            "library": "internal.flint",
+                            "type": "LocationIdxFromFlintDataTransform",
+                            "provider": "RasterTiled",
+                            "data_id": layer_name
+                        }
+                    }
+                elif layer_name == "soil_type":
+                    pool_section["BelowGroundSlowSoil"] = {
+                        "transform": {
+                            "queryString": (
+                                "SELECT value FROM soil s "
+                                "INNER JOIN spatial_unit spu ON s.spatial_unit_id = spu.id "
+                                "INNER JOIN admin_boundary a ON spu.admin_boundary_id = a.id "
+                                "INNER JOIN eco_boundary e ON spu.eco_boundary_id = e.id "
+                                "INNER JOIN soil_type st ON s.soil_type_id = st.id "
+                                "INNER JOIN pool p ON s.pool_id = p.id "
+                                "WHERE e.name = {var:eco_boundary} AND a.name = {var:admin_boundary} "
+                                "AND st.name = {var:soil_type} AND p.name = 'BelowGroundSlowSoil'"),
+                            "type": "SQLQueryTransform",
+                            "library": "internal.flint",
+                            "provider": "SQLite",
+                            "allow_empty_var_values": True
+                        }
+                    }
+        
+            logging.info("Initial pool values updated: {}".format(config_file_path))
     
     def is_disturbance_layer(self, layer):
         layer_tags = layer.get("tags") or []

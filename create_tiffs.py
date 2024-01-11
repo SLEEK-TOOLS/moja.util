@@ -15,6 +15,24 @@ try:
 except ImportError:
     import gdal
 
+def is_int(x):
+    try:
+        int(x)
+        return True
+    except:
+        return False
+        
+def is_multiband(file):
+    tile_block_metadata = os.path.splitext(file)[0].split("_")[-4:]
+    if not all((is_int(x) for x in tile_block_metadata)):
+        return True
+    
+    for s in tile_block_metadata[:2]:
+        if len(s.replace("-", "")) != 3:
+            return True
+            
+    return False
+
 def create_tiff(name, block_files, cleanup=True):
     '''
     Creates a single tiff file from a list of .grd files.
@@ -55,7 +73,7 @@ def find_spatial_output(root_path, output_type="grd"):
         for file in filter(lambda f: f.endswith(".{}".format(output_type)), files):
             scenario = extract_scenario_from_path(dir)
             indicator = dir.split(os.path.sep)[-2]
-            timestep = os.path.splitext(file)[0].split("_")[-1].zfill(3)
+            timestep = -1 if is_multiband(file) else str(int(os.path.splitext(file)[0].split("_")[-1])).zfill(3)
             file_path = os.path.abspath(os.path.join(dir, file))
             spatial_output[scenario][indicator][timestep].append(file_path)
     
@@ -77,8 +95,11 @@ def process_spatial_output(spatial_output, cleanup=True, start_year=None, output
     for scenario, raw_output in viewitems(spatial_output):
         for indicator, timesteps in viewitems(raw_output):
             for timestep, block_files in viewitems(timesteps):
-                time_part = str(start_year + int(timestep) - 1) if start_year else timestep
-                name_parts = (scenario, indicator, time_part) if scenario else (indicator, time_part)
+                name_parts = [scenario, indicator] if scenario else [indicator]
+                time_part = None if timestep == -1 else (str(start_year + int(timestep) - 1) if start_year else timestep)
+                if time_part is not None:
+                    name_parts.append(time_part)
+
                 name = os.path.join(output_path, "_".join(name_parts))
                 pool.apply_async(create_tiff, (name, block_files, cleanup), callback=logging.info)
 
