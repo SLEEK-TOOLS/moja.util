@@ -1,17 +1,23 @@
+import logging
 import os
 import shutil
 import string
 import pyodbc
 import pandas as pd
 import numpy as np
+from logging import FileHandler
+from logging import StreamHandler
 from argparse import ArgumentParser
 
 class Flux:
-    
+
     def __init__(self, source_pool, destination_pool, proportion):
         self.source_pool = source_pool
         self.destination_pool = destination_pool
-        self.proportion = proportion
+        self.proportion = float(proportion)
+
+    def __str__(self):
+        return f"{self.source_pool} to {self.destination_pool}: {self.proportion}"
 
 
 class DisturbanceMatrix:
@@ -21,6 +27,9 @@ class DisturbanceMatrix:
         self.disturbance_type = name
         self.fluxes = []
         self.ecoboundaries = []
+        
+    def __str__(self):
+        return f"{self.name}\n  " + "\n  ".join((str(flux) for flux in self.fluxes))
         
     def add_flux(self, flux):
         self.fluxes.append(flux)
@@ -95,7 +104,7 @@ def scan_for_matrices(files):
                     if is_matrix:
                         # Found a matrix - now collect all the data.
                         matrix_name = df.loc[r, c]
-                        print(f"Matrix found in {sheet} at {df_to_xls(r, c)}: {matrix_name}")
+                        logging.info(f"Matrix found in {sheet} at {df_to_xls(r, c)}: {matrix_name}")
                         checked.loc[r:r, c:c + 2] = True
                         
                         matrix = DisturbanceMatrix(matrix_name)
@@ -109,7 +118,7 @@ def scan_for_matrices(files):
                         
                         matrices.append(matrix)
                     elif is_associations_table:
-                        print(f"DM associations found in {sheet} at {df_to_xls(r, c)}")
+                        logging.info(f"DM associations found in {sheet} at {df_to_xls(r, c)}")
                         checked.loc[r:r, c:c + 2] = True
                         
                         current_dist_type = None
@@ -153,8 +162,10 @@ def scan_for_matrices(files):
 def insert_matrix(conn, matrix):
     cur = conn.cursor()
     if cur.execute("SELECT TOP 1 * FROM tbldm WHERE name = ?", [matrix.name]).fetchone() is not None:
-        print(f"Matrix '{matrix.name}' already exists - skipping.")
+        logging.info(f"Matrix '{matrix.name}' already exists - skipping.")
         return
+
+    logging.info(f"Inserting matrix: \n{matrix}")
 
     cur.execute(
         """
@@ -192,11 +203,11 @@ def insert_matrix(conn, matrix):
     params = [matrix.disturbance_type, matrix.name]
     
     if matrix.ecoboundaries:
-        print(f"Inserting {matrix.name} for {', '.join(matrix.ecoboundaries)}")
+        logging.info(f"Inserting {matrix.name} for {', '.join(matrix.ecoboundaries)}")
         dm_association_sql += f" AND ecoboundaryname IN ({','.join('?' * len(matrix.ecoboundaries))})"
         params.extend(matrix.ecoboundaries)
     else:
-        print(f"Inserting {matrix.name} with universal associations")
+        logging.info(f"Inserting {matrix.name} with universal associations")
         
     cur.execute(dm_association_sql, params)
     
@@ -205,6 +216,7 @@ def insert_matrix(conn, matrix):
             "SELECT TOP 1 * FROM tblsourcename WHERE dmstructureid = 2 AND description = ?",
             [flux.source_pool]
         ).fetchone() is None:
+            logging.info(f"WARNING: Adding new pool '{flux.source_pool}' to tblSourceName")
             cur.execute(
                 """
                 INSERT INTO tblsourcename (dmstructureid, row, description)
@@ -217,6 +229,7 @@ def insert_matrix(conn, matrix):
             "SELECT TOP 1 * FROM tblsinkname WHERE dmstructureid = 2 AND description = ?",
             [flux.destination_pool]
         ).fetchone() is None:
+            logging.info(f"WARNING: Adding new pool '{flux.destination_pool}' to tblSinkName")
             cur.execute(
                 """
                 INSERT INTO tblsinkname (dmstructureid, column, description)
@@ -250,6 +263,12 @@ if __name__ == "__main__":
         
     os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     shutil.copyfile(args.aidb_path, args.output_path)
+
+    log_path = os.path.join(os.path.dirname(args.output_path), "add_dms.log")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", handlers=[
+        FileHandler(log_path, mode="w"),
+        StreamHandler()
+    ])
 
     connect_string = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={}"
     conn = pyodbc.connect(connect_string.format(args.output_path))
