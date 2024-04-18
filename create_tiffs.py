@@ -1,20 +1,19 @@
 import os
-import logging
-import gdal
-import argparse
 import psutil
-from glob import glob
-from future.utils import viewitems
+import shutil
+import time
+import logging
+import simplejson as json
 from argparse import ArgumentParser
-from collections import defaultdict
-from multiprocessing import Pool
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from datetime import datetime
 from multiprocessing import cpu_count
-
-try:
-    from osgeo import gdal
-except ImportError:
-    import gdal
-
+from multiprocessing import Pool
+from collections import defaultdict
+from mojadata.util import gdal
+from mojadata.util import osr
+    
 def is_int(x):
     try:
         int(x)
@@ -23,7 +22,7 @@ def is_int(x):
         return False
         
 def is_multiband(file):
-    tile_block_metadata = os.path.splitext(file)[0].split("_")[-4:]
+    tile_block_metadata = file.stem.split("_")[-4:]
     if not all((is_int(x) for x in tile_block_metadata)):
         return True
     
@@ -33,123 +32,146 @@ def is_multiband(file):
             
     return False
 
-def create_tiff(name, block_files, cleanup=True):
-    '''
-    Creates a single tiff file from a list of .grd files.
-    '''
-    tiff_filename = ".".join((name, "tif"))
-    gdal.Warp(tiff_filename, block_files, creationOptions=["BIGTIFF=YES", "TILED=YES", "COMPRESS=LZW"])
-    if cleanup:
-        for block_file in block_files:
-            # Each .grd file is normally paired with a .hdr file - clean up both.
-            for raw_output_file in glob("{}.*".format(os.path.splitext(block_file)[0])):
-                os.remove(raw_output_file)
-            
-            block_file_dir = os.path.dirname(block_file)
-            indicator_dir = os.path.abspath(os.path.join(block_file_dir, ".."))
-            for block_dir in (block_file_dir, indicator_dir):
-                if not os.listdir(block_dir):
-                    os.rmdir(block_dir)
+def get_tile_groups(block_files):
+    tiles = defaultdict(list)
+    for fn in block_files:
+        tile_idx_pos = 3 if is_multiband(fn) else 4
+        tile = "_".join(fn.name.rsplit("_", tile_idx_pos)[1:3])
+        tiles[tile].append(fn)
+    
+    return tiles
 
-    return name
+def find_indicator_files(indicator, start_year=None):
+    indicator_output = defaultdict(list)
+    for file in indicator.rglob("*.tif"):
+        year = "multiband"
+        if not is_multiband(file):
+            timestep = int(file.stem.rsplit("_", 1)[1])
+            year = str(start_year + timestep - 1) if start_year is not None else timestep
+
+        indicator_output[year].append(file)
     
-def extract_scenario_from_path(path):
-    '''
-    Tries to find the scenario name in the path to a spatial output file when
-    processing a multi-scenario project.
-    '''
-    for segment in path.split(os.path.sep):
-        if "scen" in segment.lower():
-            return segment
+    return indicator_output
+
+def get_start_year(spatial_output_path):
+    sim_config_dir = spatial_output_path.parent
+    config_file = spatial_output_path.parent.joinpath("localdomain.json")
+    if not config_file.exists():
+        return None
     
-    return ""
+    simulation_config = json.load(open(config_file, "r"))
+    start_date = simulation_config["LocalDomain"]["start_date"]
     
-def find_spatial_output(root_path, output_type="grd"):
-    '''
-    Gathers up all spatial output rooted in root_path by indicator and timestep.
-    '''
-    spatial_output = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
-    for dir, subdirs, files in os.walk(root_path):
-        for file in filter(lambda f: f.endswith(".{}".format(output_type)), files):
-            scenario = extract_scenario_from_path(dir)
-            indicator = dir.split(os.path.sep)[-2]
-            timestep = -1 if is_multiband(file) else str(int(os.path.splitext(file)[0].split("_")[-1])).zfill(3)
-            file_path = os.path.abspath(os.path.join(dir, file))
-            spatial_output[scenario][indicator][timestep].append(file_path)
+    try:
+        return datetime.strptime(start_date, "%Y/%m/%d").year
+    except:
+        return None
+
+def init_pool(worker_mem):
+    gdal.SetCacheMax(worker_mem)
     
-    return spatial_output
-    
-def process_spatial_output(spatial_output, cleanup=True, start_year=None, output_path="."):
-    '''
-    Generates a tiff file for each indicator at each timestep from a dictionary
-    of {indicator: {timestep: [.grd files]}}
-    '''
-    if not os.path.exists(output_path):
-        os.makedirs(output_path)
+def process_spatial_output(spatial_output_path, output_path, epsg=None, do_cleanup=True):
+    output_path.mkdir(parents=True, exist_ok=True)
     
     num_workers = cpu_count()
     available_mem = psutil.virtual_memory().available
     worker_mem = int(available_mem * 0.8 / num_workers)
     pool = Pool(num_workers, init_pool, (worker_mem,))
     
-    for scenario, raw_output in viewitems(spatial_output):
-        for indicator, timesteps in viewitems(raw_output):
-            for timestep, block_files in viewitems(timesteps):
-                name_parts = [scenario, indicator] if scenario else [indicator]
-                time_part = None if timestep == -1 else (str(start_year + int(timestep) - 1) if start_year else timestep)
-                if time_part is not None:
-                    name_parts.append(time_part)
-
-                name = os.path.join(output_path, "_".join(name_parts))
-                pool.apply_async(create_tiff, (name, block_files, cleanup), callback=logging.info)
+    processed_indicators = []
+    start_year = get_start_year(spatial_output_path)
+    for indicator in spatial_output_path.iterdir():
+        if not indicator.is_dir() or indicator.name == "csv":
+            continue
+        
+        logging.info(f"  {indicator.name}")
+        processed_indicators.append(indicator)
+        for year, files in find_indicator_files(indicator, start_year).items():
+            logging.info(f"    {year}")
+            pool.apply_async(merge_indicator_files, (indicator, year, files, output_path, epsg))
 
     pool.close()
     pool.join()
+                
+    if do_cleanup:
+        for indicator in processed_indicators:
+            shutil.rmtree(indicator)
+
+def merge_indicator_files(indicator, year, files, output_path, epsg=None):
+    available_mem = psutil.virtual_memory().total
+    gdal_mem = int(available_mem * 0.75 / cpu_count())
+    gdal.SetCacheMax(gdal_mem)
+    gdal.UseExceptions()
+    gdal.SetConfigOption("GDAL_SWATH_SIZE",              str(gdal_mem))
+    gdal.SetConfigOption("VSI_CACHE",                    "TRUE")
+    gdal.SetConfigOption("VSI_CACHE_SIZE",               str(int(gdal_mem / len(files))))
+    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+    gdal.SetConfigOption("GDAL_PAM_ENABLED",             "NO")
+    gdal.SetConfigOption("GDAL_GEOREF_SOURCES",          "INTERNAL,NONE")
+    gdal.SetConfigOption("GTIFF_DIRECT_IO",              "YES")
+    gdal.SetConfigOption("GDAL_MAX_DATASET_POOL_SIZE",   "50000")
     
-def init_pool(worker_mem):
-    gdal.SetCacheMax(worker_mem)
+    with TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        merged_tiles = []
+        for tile, tile_files in get_tile_groups(files).items():
+            if len(tile_files) == 1:
+                merged_tiles.extend(tile_files)
+                continue
+        
+            tile_vrt_filename = str(tmp_path.joinpath(f"{indicator.name}_{tile}_{year}.vrt"))
+            gdal.BuildVRT(tile_vrt_filename, tile_files)
+
+            tile_tif_filename = str(tmp_path.joinpath(f"{indicator.name}_{tile}_{year}.tif"))
+            merged_tiles.append(tile_tif_filename)
+
+            gdal.Translate(
+                tile_tif_filename, tile_vrt_filename, maskBand="none",
+                creationOptions=["BIGTIFF=YES", "TILED=YES", "SPARSE_OK=YES"])
+
+        vrt_filename = str(tmp_path.joinpath(f"{indicator.name}_{year}.vrt"))
+        gdal.BuildVRT(vrt_filename, [str(f) for f in merged_tiles])
     
+        tif_filename = str(output_path.joinpath(f"{indicator.name}_{year}.tif"))
+       
+        if epsg:
+            dest_srs = osr.SpatialReference()
+            dest_srs.ImportFromEPSG(self._epsg)
+            gdal.Warp(
+                tif_filename, vrt_filename, dstSrs=dest_srs, maskBand="none",
+                creationOptions=[
+                    "BIGTIFF=YES", "TILED=YES", "COMPRESS=DEFLATE",
+                    f"NUM_THREADS={int(cpu_count() / 2)}"
+                ])
+        else:
+            gdal.Translate(
+                tif_filename, vrt_filename, maskBand="none",
+                creationOptions=[
+                    "BIGTIFF=YES", "TILED=YES", "COMPRESS=DEFLATE",
+                    f"NUM_THREADS={int(cpu_count() / 2)}"
+                ])
+
 if __name__ == "__main__":
     gdal.PushErrorHandler("CPLQuietErrorHandler")
 
-    parser = ArgumentParser(description="Generate tiffs from raw spatial output. "
-        "If this tool is pointed at a directory level above multiple runs that "
-        "together cover a larger geographical area, the outputs will be combined.")
-        
-    parser.add_argument("--indicator_root", required=False, default=".",
-                        help="path to the spatial output root directory")
-
-    parser.add_argument("--no-cleanup", dest="cleanup", action="store_false",
-                        help="keep VRT/GRD/HDR files when finished")
-                        
-    parser.add_argument("--start_year", required=False, type=int,
-                        help="the timestep 1 year, to use years instead of timesteps in filenames")
-                        
-    parser.add_argument("--output_path", required=False, default=".",
-                        help="path to store generated tiffs in - will be created if it doesn't exist")
-
-    parser.add_argument("--log_path", required=False, default="logs",
-                        help="path to create log file in")
-                        
-    parser.add_argument("--output_type", required=False, default="grd",
-                        help="the spatial output type of the run (grd = GRD/HDR, tif = TIFF)")
-                        
-    parser.set_defaults(cleanup=True)
+    parser = ArgumentParser(description="Generate final layers from raw spatial output.")
+    parser.add_argument("indicator_root", help="path to the spatial output root directory")
+    parser.add_argument("output_path", help="path to store generated tiffs in - will be created if it doesn't exist")
+    parser.add_argument("--log_path", required=False, default="logs", help="path to create log file in")
+    parser.add_argument("--epsg", required=False, help="alternate EPSG code to project final layers in")
+    parser.add_argument("--no_cleanup", required=False, help="do not clean up original output files", action="store_true")
     args = parser.parse_args()
-    
-    if not os.path.exists(args.log_path):
-        os.makedirs(args.log_path)
-    
-    logging.basicConfig(filename=os.path.join(args.log_path, "create_tiffs.log"),
-                        filemode="w", level=logging.DEBUG,
-                        format="%(asctime)s %(message)s", datefmt="%m/%d %H:%M:%S")
 
-    spatial_output = find_spatial_output(args.indicator_root, args.output_type)
-    if spatial_output:
-        logging.info("Found {} scenarios with {} total spatial outputs.".format(
-            len(spatial_output), sum(len(indicators) for indicators in spatial_output.values())))
-            
-        process_spatial_output(spatial_output, args.cleanup, args.start_year, args.output_path)
-        logging.info("Done")
-    else:
-        logging.info("No spatial output found.")
+    log_path = Path(args.log_path)
+    log_path.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(filename=log_path.joinpath("create_tiffs.log"), filemode="w",
+                        level=logging.DEBUG, format="%(asctime)s %(message)s",
+                        datefmt="%m/%d %H:%M:%S")
+
+    spatial_output_path = Path(args.indicator_root)
+    output_path = Path(args.output_path)
+    do_cleanup = not args.no_cleanup
+
+    logging.info(f"Processing spatial output from {spatial_output_path} into {output_path}")
+    process_spatial_output(spatial_output_path, output_path, args.epsg, do_cleanup)
+    logging.info("Done")
