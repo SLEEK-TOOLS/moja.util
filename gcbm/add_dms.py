@@ -5,6 +5,7 @@ import string
 import pyodbc
 import pandas as pd
 import numpy as np
+import sqlite3
 from logging import FileHandler
 from logging import StreamHandler
 from argparse import ArgumentParser
@@ -59,7 +60,7 @@ def scan_for_matrices(files):
         for sheet, df in sheets.items():
             # Find all the populated cells and whether they're a string or numeric type
             # to simplify detecting the disturbance matrix definitions.
-            search_mask = df.applymap(
+            search_mask = df.map(
                 lambda val: (
                     "s" if isinstance(val, str)
                     else "n" if isinstance(val, float) or isinstance(val, int)
@@ -87,7 +88,8 @@ def scan_for_matrices(files):
                     <source>    <sink>     <proportion>
                     '''
                     is_matrix = np.all(search_mask.loc[r:r, c:c + 2].values == matrix_header) \
-                        and np.all(search_mask.loc[r + 1:r + 1, c: c + 2].values == matrix_flux)
+                        and search_mask.loc[r + 1:r + 1, c:c + 2].size > 0 \
+                        and np.all(search_mask.loc[r + 1:r + 1, c:c + 2].values == matrix_flux)
                         
                     '''
                     Disturbance matrix associations are defined as a single cell with the value
@@ -158,8 +160,18 @@ def scan_for_matrices(files):
         
     return matrices
 
+def load_aidb_matrices(matrices, aidb_path):
+    connect_string = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={}"
+    conn = pyodbc.connect(connect_string.format(aidb_path))
+    try:
+        for matrix in matrices:
+            insert_aidb_matrix(conn, matrix)
+    finally:
+        if conn:
+            conn.commit()
+            conn.close()
 
-def insert_matrix(conn, matrix):
+def insert_aidb_matrix(conn, matrix):
     cur = conn.cursor()
     if cur.execute("SELECT TOP 1 * FROM tbldm WHERE name = ?", [matrix.name]).fetchone() is not None:
         logging.info(f"Matrix '{matrix.name}' already exists - skipping.")
@@ -250,6 +262,107 @@ def insert_matrix(conn, matrix):
                 AND snk.description = ?
             """, [flux.proportion, matrix.name, flux.source_pool, flux.destination_pool])
 
+def load_cbm_defaults_matrices(matrices, aidb_path):
+    with sqlite3.connect(aidb_path) as conn:
+        for matrix in matrices:
+            insert_cbm_defaults_matrix(conn, matrix)
+
+        conn.commit()
+    
+def insert_cbm_defaults_matrix(conn, matrix):
+    if conn.execute(
+        "SELECT * FROM disturbance_matrix_tr WHERE locale_id = 1 AND name = ? LIMIT 1",
+        [matrix.name]
+    ).fetchone() is not None:
+        logging.info(f"Matrix '{matrix.name}' already exists - skipping.")
+        return
+
+    logging.info(f"Inserting matrix: \n{matrix}")
+
+    conn.execute(
+        """
+        INSERT INTO disturbance_matrix (id)
+        SELECT MAX(id) + 1
+        FROM disturbance_matrix
+        """)
+    
+    conn.execute(
+        """
+        INSERT INTO disturbance_matrix_tr (id, disturbance_matrix_id, locale_id, name, description)
+        SELECT MAX(dm_tr.id) + 1, MAX(dm.id), 1, ?, ?
+        FROM disturbance_matrix dm,
+             disturbance_matrix_tr dm_tr
+        """, [matrix.name, matrix.name])
+    
+    if conn.execute(
+        "SELECT * FROM disturbance_type_tr WHERE locale_id = 1 AND name = ? LIMIT 1",
+        [matrix.disturbance_type]
+    ).fetchone() is None:
+        conn.execute(
+            """
+            INSERT INTO disturbance_type (id)
+            SELECT MAX(id) + 1
+            FROM disturbance_type
+            """)
+
+        conn.execute(
+            """
+            INSERT INTO disturbance_type_tr (id, disturbance_type_id, locale_id, name, description)
+            SELECT MAX(dt_tr.id + 1), MAX(dt.id), 1, ?, ?
+            FROM disturbance_type dt,
+                 disturbance_type_tr dt_tr
+            """, [matrix.disturbance_type, matrix.disturbance_type])
+    
+    dm_association_sql = \
+        """
+        INSERT INTO disturbance_matrix_association (
+            spatial_unit_id, disturbance_type_id, disturbance_matrix_id)
+        SELECT
+            spu.id, dt.disturbance_type_id, dm.disturbance_matrix_id
+        FROM disturbance_type_tr dt,
+             disturbance_matrix_tr dm,
+             spatial_unit spu
+             INNER JOIN eco_boundary_tr eco
+                ON spu.eco_boundary_id = eco.eco_boundary_id
+        WHERE dt.locale_id = 1 AND dt.name = ?
+            AND dm.locale_id = 1 AND dm.name = ?
+            AND eco.locale_id = 1
+        """
+        
+    params = [matrix.disturbance_type, matrix.name]
+    
+    if matrix.ecoboundaries:
+        logging.info(f"Inserting {matrix.name} for {', '.join(matrix.ecoboundaries)}")
+        dm_association_sql += f" AND eco.name IN ({','.join('?' * len(matrix.ecoboundaries))})"
+        params.extend(matrix.ecoboundaries)
+    else:
+        logging.info(f"Inserting {matrix.name} with universal associations")
+        
+    conn.execute(dm_association_sql, params)
+    
+    for flux in matrix.fluxes:
+        for pool in (flux.source_pool, flux.destination_pool):
+            if conn.execute(
+                "SELECT * FROM pool_tr WHERE locale_id = 1 AND name = ?",
+                [flux.source_pool]
+            ).fetchone() is None:
+                raise RuntimeError(f"Pool '{pool}' does not exist in AIDB")
+
+        conn.execute(
+            """
+            INSERT INTO disturbance_matrix_value (
+                disturbance_matrix_id, source_pool_id, sink_pool_id, proportion)
+            SELECT disturbance_matrix_id, p_src.id, p_snk.id, ?
+            FROM disturbance_matrix_tr dm,
+                 pool_tr p_src,
+                 pool_tr p_snk
+            WHERE dm.name = ?
+                AND p_src.locale_id = 1
+                AND p_src.name = ?
+                AND p_snk.locale_id = 1
+                AND p_snk.name = ?
+            """, [flux.proportion, matrix.name, flux.source_pool, flux.destination_pool])
+
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Add DMs to AIDB")
@@ -270,12 +383,8 @@ if __name__ == "__main__":
         StreamHandler()
     ])
 
-    connect_string = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={}"
-    conn = pyodbc.connect(connect_string.format(args.output_path))
-    try:
-        for matrix in scan_for_matrices(args.matrix_paths):
-            insert_matrix(conn, matrix)
-    finally:
-        if conn:
-            conn.commit()
-            conn.close()
+    matrices = scan_for_matrices(args.matrix_paths)
+    if args.output_path.endswith(".mdb"):
+        load_aidb_matrices(matrices, args.output_path)
+    else:
+        load_cbm_defaults_matrices(matrices, args.output_path)
